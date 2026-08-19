@@ -12,6 +12,23 @@
   켜는 것은 물론 컴퓨터를 완전히 재부팅해도 그대로 유지**됩니다 (자세한 저장
   위치는 아래 "5. 참고 / 주의사항" 참고).
 
+
+## 0. 인식 키
+### 정상 감지됨
+숫자 0–9, 알파벳 a–z
+space, tab, enter/return, esc, backspace, delete, insert
+home, end, 방향키(↑↓←→)
+shift, ctrl, alt (좌/우 구분 없이 통합)
+caps lock, scroll lock, num lock, pause
+F1–F12
+menu(문맥 메뉴 키, 있는 키보드에 한해)
+
+### 감지 안 됨 (버그) — 설정 창에는 잡히지만 실제 게임 중엔 인식 안됨
+기호키 전체: ` \ - = [ ] ; ' , . /
+Page Up / Page Down
+Print Screen
+
+
 ## 1. 준비
 
 ### Windows
