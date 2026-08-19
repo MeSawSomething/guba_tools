@@ -11,14 +11,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            build_cmd: pyinstaller --onefile --noconsole --name CooldownTracker main.py
-            output_path: dist/CooldownTracker.exe
-            artifact_name: CooldownTracker-windows-exe
+            build_cmd: pyinstaller --onefile --noconsole --name CooltimeTracker main.py
+            output_path: dist/CooltimeTracker.exe
+            artifact_name: CooltimeTracker-windows-exe
             make_dmg: false
           - os: macos-latest
-            build_cmd: pyinstaller --onefile --windowed --name CooldownTracker main.py
-            output_path: dist/CooldownTracker.dmg
-            artifact_name: CooldownTracker-macos-dmg
+            build_cmd: pyinstaller --onefile --windowed --name CooltimeTracker main.py
+            output_path: dist/CooltimeTracker.dmg
+            artifact_name: CooltimeTracker-macos-dmg
             make_dmg: true
 
     runs-on: ${{ matrix.os }}
@@ -43,9 +43,9 @@ jobs:
         if: matrix.make_dmg == true
         run: |
           mkdir -p dist/dmg_staging
-          cp -R dist/CooldownTracker.app dist/dmg_staging/
+          cp -R dist/CooltimeTracker.app dist/dmg_staging/
           ln -s /Applications dist/dmg_staging/Applications
-          hdiutil create -volname "CooldownTracker" -srcfolder dist/dmg_staging -ov -format UDZO dist/CooldownTracker.dmg
+          hdiutil create -volname "CooltimeTracker" -srcfolder dist/dmg_staging -ov -format UDZO dist/CooltimeTracker.dmg
           rm -rf dist/dmg_staging
 
       - name: Upload artifact

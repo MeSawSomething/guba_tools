@@ -1,4 +1,4 @@
-# 쿨타임 트래커 (Cooldown Tracker)
+# 쿨타임 트래커 (Cooltime Tracker)
 
 키보드로 스킬을 쓰는 게임을 할 때, 지정한 키를 누르면 그 스킬의 쿨타임을
 세어주는 작은 오버레이 창이 화면 위에 항상 떠 있는 프로그램입니다.
@@ -44,7 +44,7 @@
 
    `시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용(Accessibility)` 와
    `입력 모니터링(Input Monitoring)` 두 곳 모두에서 **터미널**(또는 나중에
-   만든 `CooldownTracker.app`)을 체크/허용해야 합니다.
+   만든 `CooltimeTracker.app`)을 체크/허용해야 합니다.
 
 ## 2. 실행
 
@@ -61,7 +61,7 @@ python3 main.py
 ```
 
 화면 좌측 상단에 반투명한 작은 창이 뜹니다. 이 창을 게임 화면 위로
-드래그해서(위쪽 "⋮⋮ 쿨타임 트래커" 부분을 잡고 이동) 원하는 위치에 두세요.
+드래그해서(위쪽 "쿨타임" 부분을 잡고 이동) 원하는 위치에 두세요.
 
 ## 3. 스킬 설정하기
 
@@ -105,9 +105,9 @@ python3 main.py
   벨(터미널 비프음)로 대체됩니다.
 - **스킬 설정 저장 위치**: `config.json`은 exe/app이 어디 있든 상관없이 항상
   아래의 고정된 사용자 폴더에 저장됩니다.
-  - Windows: `%APPDATA%\CooldownTracker\config.json`
-  - macOS: `~/Library/Application Support/CooldownTracker/config.json`
-  - Linux: `~/.config/CooldownTracker/config.json`
+  - Windows: `%APPDATA%\CooltimeTracker\config.json`
+  - macOS: `~/Library/Application Support/CooltimeTracker/config.json`
+  - Linux: `~/.config/CooltimeTracker/config.json`
 
   exe나 app을 다른 폴더로 옮기거나, 컴퓨터를 재부팅해도 이 폴더는 그대로라서
   설정이 사라지지 않습니다. (이전 버전에서 main.py/exe와 같은 폴더에
@@ -124,10 +124,10 @@ python3 main.py
 
 ### 방법 A. 내 PC에서 바로 빌드 (Python이 설치되어 있다면, 가장 빠름)
 
-- **Windows**: `build_exe.bat` 더블클릭 → `dist\CooldownTracker.exe` 생성
+- **Windows**: `build_exe.bat` 더블클릭 → `dist\CooltimeTracker.exe` 생성
 - **macOS**: `build_mac.command` 더블클릭 →
-  `dist/CooldownTracker.app`을 만든 뒤, 그걸 `hdiutil`로 감싸서
-  `dist/CooldownTracker.dmg`까지 자동으로 만들어줍니다.
+  `dist/CooltimeTracker.app`을 만든 뒤, 그걸 `hdiutil`로 감싸서
+  `dist/CooltimeTracker.dmg`까지 자동으로 만들어줍니다.
   (처음 더블클릭 시 "확인되지 않은 개발자" 경고가 뜨면 파인더에서 파일을
   마우스 우클릭(또는 Control-클릭) → **열기** → **열기**를 선택하세요)
 
@@ -137,19 +137,19 @@ python3 main.py
 ```
 # Windows
 pip install -r requirements.txt pyinstaller
-python -m PyInstaller --onefile --noconsole --name CooldownTracker main.py
+python -m PyInstaller --onefile --noconsole --name CooltimeTracker main.py
 
 # macOS
 python3 -m pip install -r requirements.txt pyinstaller
-python3 -m PyInstaller --onefile --windowed --name CooldownTracker main.py
+python3 -m PyInstaller --onefile --windowed --name CooltimeTracker main.py
 mkdir dist/dmg_staging
-cp -R dist/CooldownTracker.app dist/dmg_staging/
+cp -R dist/CooltimeTracker.app dist/dmg_staging/
 ln -s /Applications dist/dmg_staging/Applications
-hdiutil create -volname "CooldownTracker" -srcfolder dist/dmg_staging -ov -format UDZO dist/CooldownTracker.dmg
+hdiutil create -volname "CooltimeTracker" -srcfolder dist/dmg_staging -ov -format UDZO dist/CooltimeTracker.dmg
 ```
 
-`dist` 폴더에 생성된 `CooldownTracker.exe`(Windows) 또는
-`CooldownTracker.dmg`(macOS)를 실행하면 됩니다. dmg는 더블클릭하면 창이 열리고,
+`dist` 폴더에 생성된 `CooltimeTracker.exe`(Windows) 또는
+`CooltimeTracker.dmg`(macOS)를 실행하면 됩니다. dmg는 더블클릭하면 창이 열리고,
 그 안의 앱 아이콘을 같이 보이는 Applications 바로가기로 드래그하면 설치됩니다.
 스킬 설정은 exe/app 위치와 무관하게 사용자 앱 데이터 폴더에 저장되므로,
 앱을 옮기거나 재설치해도 계속 유지됩니다 (정확한 위치는 위 "5. 참고 /
@@ -167,7 +167,7 @@ hdiutil create -volname "CooldownTracker" -srcfolder dist/dmg_staging -ov -forma
 2. 저장소의 **Actions** 탭 → "Build Windows EXE and macOS DMG" 워크플로우가
    자동 실행됩니다 (또는 "Run workflow"로 수동 실행).
 3. 완료되면 해당 실행 결과 페이지 하단의 **Artifacts** 에서
-   `CooldownTracker-windows-exe`와 `CooldownTracker-macos-dmg`를 각각
+   `CooltimeTracker-windows-exe`와 `CooltimeTracker-macos-dmg`를 각각
    내려받으면 됩니다.
 
 ### 참고

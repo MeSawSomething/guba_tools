@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+
+# 빌드 산출물 (build_exe.bat / build_mac.command / make_icon.py 가 자동 생성)
+build/
+dist/
+icon.ico
+icon.icns

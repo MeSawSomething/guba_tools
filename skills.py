@@ -14,33 +14,47 @@ import os
 import shutil
 import sys
 
-APP_DIR_NAME = "CooldownTracker"
+APP_DIR_NAME = "CooltimeTracker"
+# 예전 이름(CooldownTracker)으로 저장돼 있던 설정을 한 번 옮겨오기 위한 이름.
+_LEGACY_APP_DIR_NAMES = ["CooldownTracker"]
 
 
-def _config_dir():
+def _app_data_dir(app_dir_name):
     """OS별로 표준적인 사용자 설정 저장 위치를 반환한다."""
     if sys.platform == "win32":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        return os.path.join(base, APP_DIR_NAME)
+        return os.path.join(base, app_dir_name)
     elif sys.platform == "darwin":
-        return os.path.expanduser(f"~/Library/Application Support/{APP_DIR_NAME}")
+        return os.path.expanduser(f"~/Library/Application Support/{app_dir_name}")
     else:
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-        return os.path.join(base, APP_DIR_NAME)
+        return os.path.join(base, app_dir_name)
 
 
-def _legacy_config_path():
-    """예전 버전(main.py/exe와 같은 폴더에 저장하던 방식)의 config.json 위치.
-    있으면 새 위치로 한 번만 옮겨서, 업데이트 후에도 기존에 입력해둔 스킬을
-    잃어버리지 않게 한다."""
+def _config_dir():
+    return _app_data_dir(APP_DIR_NAME)
+
+
+def _legacy_config_paths():
+    """예전 버전의 config.json 위치들(있으면 새 위치로 한 번만 옮겨서, 업데이트
+    후에도 기존에 입력해둔 스킬/창 위치를 잃어버리지 않게 한다).
+    1) main.py/exe와 같은 폴더에 저장하던 아주 옛날 방식
+    2) 프로그램 이름이 CooldownTracker였을 때의 사용자 앱 데이터 폴더
+    """
+    paths = []
     try:
         if getattr(sys, "frozen", False):
             base = os.path.dirname(os.path.abspath(sys.executable))
         else:
             base = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base, "config.json")
+        paths.append(os.path.join(base, "config.json"))
     except Exception:
-        return None
+        pass
+
+    for old_name in _LEGACY_APP_DIR_NAMES:
+        paths.append(os.path.join(_app_data_dir(old_name), "config.json"))
+
+    return paths
 
 
 CONFIG_DIR = _config_dir()
@@ -57,15 +71,36 @@ DEFAULT_SKILLS = [
 def _migrate_legacy_config_if_needed():
     if os.path.exists(CONFIG_PATH):
         return
-    legacy_path = _legacy_config_path()
-    if not legacy_path or legacy_path == CONFIG_PATH:
-        return
-    if os.path.exists(legacy_path):
-        try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
-            shutil.copyfile(legacy_path, CONFIG_PATH)
-        except Exception:
-            pass
+    for legacy_path in _legacy_config_paths():
+        if not legacy_path or legacy_path == CONFIG_PATH:
+            continue
+        if os.path.exists(legacy_path):
+            try:
+                os.makedirs(CONFIG_DIR, exist_ok=True)
+                shutil.copyfile(legacy_path, CONFIG_PATH)
+            except Exception:
+                pass
+            return
+
+
+def _read_config_file():
+    """config.json 을 dict 형태로 읽어온다. 예전 버전(배열만 저장)과도 호환."""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    if isinstance(data, list):
+        return {"skills": data}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def _write_config_file(data):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def load_skills():
@@ -77,13 +112,9 @@ def load_skills():
         return [dict(s) for s in DEFAULT_SKILLS]
 
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, list):
-            raise ValueError("config.json 형식이 올바르지 않습니다.")
-
+        raw_skills = _read_config_file().get("skills", [])
         cleaned = []
-        for item in data:
+        for item in raw_skills:
             name = str(item.get("name", "")).strip() or "이름없음"
             key = str(item.get("key", "")).strip()
             cooldown = float(item.get("cooldown", 0))
@@ -99,6 +130,24 @@ def load_skills():
 def save_skills(skills):
     """스킬 목록을 config.json 에 저장한다. (프로그램을 껐다 켜도, 컴퓨터를
     재부팅해도 유지됨 — 사용자 앱 데이터 폴더에 저장하기 때문)"""
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(skills, f, ensure_ascii=False, indent=2)
+    data = _read_config_file()
+    data["skills"] = skills
+    _write_config_file(data)
+
+
+def load_window_position():
+    """마지막으로 저장된 오버레이 창 위치 (x, y) 를 반환한다. 없으면 None."""
+    pos = _read_config_file().get("window_position")
+    if not isinstance(pos, dict):
+        return None
+    try:
+        return int(pos["x"]), int(pos["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def save_window_position(x, y):
+    """오버레이 창 위치를 config.json 에 저장한다."""
+    data = _read_config_file()
+    data["window_position"] = {"x": int(x), "y": int(y)}
+    _write_config_file(data)

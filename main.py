@@ -17,6 +17,8 @@
 일부 안티치트가 적용된 게임에서는 전역 키 후킹이 차단될 수 있습니다.
 """
 
+import glob
+import os
 import queue
 import subprocess
 import sys
@@ -37,7 +39,65 @@ try:
 except ImportError:
     HAS_WINSOUND = False
 
-from skills import load_skills, save_skills, DEFAULT_SOUND
+from skills import (
+    load_skills,
+    save_skills,
+    load_window_position,
+    save_window_position,
+    DEFAULT_SOUND,
+)
+
+# 프로그램이 이미 실행 중일 때 exe를 다시 클릭해도 중복 실행되지 않도록
+# 막기 위한 이름 있는 뮤텍스(Windows) / 락 파일(그 외 OS).
+_SINGLE_INSTANCE_NAME = "CooltimeTracker-SingleInstance-Mutex-3F2C9B7E"
+_single_instance_handle = None
+
+
+def acquire_single_instance_lock():
+    """이미 실행 중인 인스턴스가 있으면 True, 없으면(=이번이 최초 실행) False."""
+    global _single_instance_handle
+
+    if sys.platform == "win32":
+        import ctypes
+
+        ERROR_ALREADY_EXISTS = 183
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.CreateMutexW(None, False, _SINGLE_INSTANCE_NAME)
+        already_running = kernel32.GetLastError() == ERROR_ALREADY_EXISTS
+        if handle and not already_running:
+            _single_instance_handle = handle  # GC/뮤텍스 해제 방지를 위해 보관
+        return already_running
+
+    # macOS 등: 임시 디렉터리의 락 파일로 대체
+    import os
+    import tempfile
+
+    lock_path = os.path.join(tempfile.gettempdir(), _SINGLE_INSTANCE_NAME + ".lock")
+    try:
+        import fcntl
+
+        _single_instance_handle = open(lock_path, "w")
+        try:
+            fcntl.flock(_single_instance_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return False
+        except OSError:
+            return True
+    except ImportError:
+        return False
+
+
+def find_icon_png():
+    """exe(또는 main.py)와 같은 폴더에 있는 png 파일을 찾아 앱 아이콘으로 쓴다.
+    여러 개면 이름순으로 첫 번째, 없으면 None(기본 아이콘 유지)."""
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    try:
+        pngs = sorted(glob.glob(os.path.join(base, "*.png")))
+    except Exception:
+        return None
+    return pngs[0] if pngs else None
 
 # ---- 색상 테마 ----
 BG_COLOR = "#1e1e1e"
@@ -45,7 +105,7 @@ ACCENT = "#2d2d2d"
 BAR_BG = "#3a3a3a"
 BAR_COOLDOWN = "#5b7fff"
 BAR_READY = "#39d353"
-BAR_FLASH = "#ffffff"
+BAR_FLASH = "#ff9800"
 TEXT_COLOR = "#ffffff"
 MUTED_TEXT = "#aaaaaa"
 
@@ -170,6 +230,32 @@ def play_sound(sound_id):
     threading.Thread(target=worker, daemon=True).start()
 
 
+def position_near(win, ref, width=None, height=None, gap=10):
+    """win을 ref 위젯 근처(오른쪽, 화면 밖이면 왼쪽)에 배치한다."""
+    win.update_idletasks()
+    if width is None:
+        width = win.winfo_reqwidth()
+    if height is None:
+        height = win.winfo_reqheight()
+
+    ref_x = ref.winfo_rootx()
+    ref_y = ref.winfo_rooty()
+    ref_w = ref.winfo_width()
+    screen_w = win.winfo_screenwidth()
+    screen_h = win.winfo_screenheight()
+
+    x = ref_x + ref_w + gap
+    if x + width > screen_w:
+        x = ref_x - width - gap
+    if x < 0:
+        x = ref_x
+    y = ref_y
+    if y + height > screen_h:
+        y = max(0, screen_h - height)
+
+    win.geometry(f"{width}x{height}+{x}+{y}")
+
+
 class SkillRuntime:
     """실행 중에만 쓰이는 스킬의 상태(카운트다운 진행 상황 등)."""
 
@@ -191,6 +277,7 @@ class CooldownOverlay:
 
         self.root = tk.Tk()
         self.root.withdraw()  # 실제 보이는 창은 아래의 Toplevel
+        self._apply_app_icon()
 
         self.win = tk.Toplevel(self.root)
         self.win.overrideredirect(True)  # 제목표시줄 없는 오버레이 창
@@ -200,7 +287,7 @@ class CooldownOverlay:
         except tk.TclError:
             pass
         self.win.configure(bg=BG_COLOR)
-        self.win.geometry("+40+40")
+        self._apply_saved_position()
         self.win.protocol("WM_DELETE_WINDOW", self.quit)
 
         self._drag_data = {"x": 0, "y": 0}
@@ -219,7 +306,7 @@ class CooldownOverlay:
         header.pack(fill="x")
 
         title = tk.Label(
-            header, text="⋮⋮ 쿨타임 트래커", bg=ACCENT, fg=TEXT_COLOR,
+            header, text="쿨타임", bg=ACCENT, fg=TEXT_COLOR,
             font=("Segoe UI", 9, "bold"), padx=8, pady=4,
         )
         title.pack(side="left")
@@ -244,6 +331,7 @@ class CooldownOverlay:
         for widget in (header, title):
             widget.bind("<Button-1>", self._start_drag)
             widget.bind("<B1-Motion>", self._on_drag)
+            widget.bind("<ButtonRelease-1>", self._end_drag)
 
         self.body = tk.Frame(self.win, bg=BG_COLOR)
         self.body.pack(fill="both", expand=True, padx=6, pady=6)
@@ -294,7 +382,34 @@ class CooldownOverlay:
 
             self.rows[id(skill)] = (canvas, bar, text_id)
 
-    # ---------------- 창 드래그 ----------------
+    # ---------------- 아이콘 ----------------
+
+    def _apply_app_icon(self):
+        icon_path = find_icon_png()
+        if not icon_path:
+            return
+        try:
+            # PhotoImage 참조를 인스턴스에 보관해야 함 (안 그러면 가비지 컬렉션되어
+            # 아이콘이 사라짐)
+            self._icon_image = tk.PhotoImage(file=icon_path)
+            self.root.iconphoto(True, self._icon_image)
+        except Exception:
+            pass
+
+    # ---------------- 창 드래그 / 위치 저장 ----------------
+
+    def _apply_saved_position(self):
+        x, y = 40, 40
+        pos = load_window_position()
+        if pos is not None:
+            saved_x, saved_y = pos
+            screen_w = self.win.winfo_screenwidth()
+            screen_h = self.win.winfo_screenheight()
+            # 저장 당시와 화면 해상도/모니터 구성이 달라져 창이 화면 밖으로
+            # 완전히 벗어나는 경우에만 기본 위치로 되돌린다.
+            if -100 <= saved_x <= screen_w - 50 and -100 <= saved_y <= screen_h - 50:
+                x, y = saved_x, saved_y
+        self.win.geometry(f"+{x}+{y}")
 
     def _start_drag(self, event):
         self._drag_data["x"] = event.x_root - self.win.winfo_x()
@@ -304,6 +419,9 @@ class CooldownOverlay:
         x = event.x_root - self._drag_data["x"]
         y = event.y_root - self._drag_data["y"]
         self.win.geometry(f"+{x}+{y}")
+
+    def _end_drag(self, event):
+        save_window_position(self.win.winfo_x(), self.win.winfo_y())
 
     # ---------------- 전역 키 감지 ----------------
 
@@ -396,7 +514,7 @@ class CooldownOverlay:
 
     def _flash(self, skill, count):
         entry = self.rows.get(id(skill))
-        if not entry or count >= 6:
+        if not entry or count >= 10:
             if entry:
                 canvas, bar, _ = entry
                 canvas.itemconfig(bar, fill=BAR_READY)
@@ -404,7 +522,11 @@ class CooldownOverlay:
         canvas, bar, _ = entry
         color = BAR_FLASH if count % 2 == 0 else BAR_READY
         canvas.itemconfig(bar, fill=color)
-        self.root.after(150, lambda: self._flash(skill, count + 1))
+        self.root.after(450, lambda: self._flash(skill, count + 1))
+
+    def flash_skill_preview(self, skill):
+        """알림음 미리듣기 테스트용: 해당 스킬의 '준비' 표시줄을 실제 알림과 같은 방식으로 깜빡인다."""
+        self._flash(skill, 0)
 
     # ---------------- 설정 ----------------
 
@@ -417,6 +539,10 @@ class CooldownOverlay:
         self._rebuild_rows()
 
     def quit(self):
+        try:
+            save_window_position(self.win.winfo_x(), self.win.winfo_y())
+        except Exception:
+            pass
         if self._listener is not None:
             try:
                 self._listener.stop()
@@ -431,8 +557,10 @@ class CooldownOverlay:
 class SkillDialog:
     """스킬 추가/수정용 팝업. self.result 에 dict 또는 None 이 담긴다."""
 
-    def __init__(self, parent, initial=None):
+    def __init__(self, parent, initial=None, app=None, skill=None):
         self.result = None
+        self.app = app
+        self.skill = skill
         self.top = tk.Toplevel(parent)
         self.top.title("스킬 추가" if initial is None else "스킬 수정")
         self.top.attributes("-topmost", True)
@@ -469,6 +597,8 @@ class SkillDialog:
         tk.Button(btns, text="확인", width=8, command=self._ok).pack(side="left", padx=6)
         tk.Button(btns, text="취소", width=8, command=self.top.destroy).pack(side="left", padx=6)
 
+        position_near(self.top, parent)
+
         self.top.wait_window()
 
     def _selected_sound_id(self):
@@ -480,6 +610,8 @@ class SkillDialog:
 
     def _preview_sound(self):
         play_sound(self._selected_sound_id())
+        if self.app is not None and self.skill is not None:
+            self.app.flash_skill_preview(self.skill)
 
     def _capture_key(self):
         self.key_var.set("키를 누르세요...")
@@ -517,8 +649,8 @@ class SettingsWindow:
         self.app = app
         self.win = tk.Toplevel(app.win)
         self.win.title("쿨타임 트래커 설정")
-        self.win.geometry("380x360")
         self.win.attributes("-topmost", True)
+        position_near(self.win, app.win, width=380, height=360)
 
         self.tree = ttk.Treeview(
             self.win, columns=("name", "key", "cooldown", "sound"), show="headings", height=8
@@ -560,7 +692,7 @@ class SettingsWindow:
         ]
 
     def add_skill(self):
-        dlg = SkillDialog(self.win)
+        dlg = SkillDialog(self.win, app=self.app)
         if dlg.result:
             definitions = self._current_definitions()
             definitions.append(dlg.result)
@@ -590,6 +722,8 @@ class SettingsWindow:
                 "cooldown": current.cooldown,
                 "sound": current.sound,
             },
+            app=self.app,
+            skill=current,
         )
         if dlg.result:
             definitions = self._current_definitions()
@@ -610,5 +744,11 @@ class SettingsWindow:
 
 
 if __name__ == "__main__":
+    if acquire_single_instance_lock():
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showwarning("쿨타임 트래커", "쿨타임 트래커가 이미 실행 중입니다.")
+        sys.exit(0)
+
     app = CooldownOverlay()
     app.run()
