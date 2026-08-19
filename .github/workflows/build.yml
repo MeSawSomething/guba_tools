@@ -1,0 +1,55 @@
+name: Build Windows EXE and macOS DMG
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            build_cmd: pyinstaller --onefile --noconsole --name CooldownTracker main.py
+            output_path: dist/CooldownTracker.exe
+            artifact_name: CooldownTracker-windows-exe
+            make_dmg: false
+          - os: macos-latest
+            build_cmd: pyinstaller --onefile --windowed --name CooldownTracker main.py
+            output_path: dist/CooldownTracker.dmg
+            artifact_name: CooldownTracker-macos-dmg
+            make_dmg: true
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build
+        run: ${{ matrix.build_cmd }}
+
+      # macOS only: package the .app into a .dmg using hdiutil (a real Apple
+      # tool that only exists on macOS, which is why this step needs to run
+      # on the macos-latest runner rather than being built anywhere else).
+      - name: Package as DMG
+        if: matrix.make_dmg == true
+        run: |
+          mkdir -p dist/dmg_staging
+          cp -R dist/CooldownTracker.app dist/dmg_staging/
+          ln -s /Applications dist/dmg_staging/Applications
+          hdiutil create -volname "CooldownTracker" -srcfolder dist/dmg_staging -ov -format UDZO dist/CooldownTracker.dmg
+          rm -rf dist/dmg_staging
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.output_path }}
