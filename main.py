@@ -299,6 +299,11 @@ class CooldownOverlay:
 
         self.root.after(100, self._tick)
 
+        # macOS: 게임 창이 포커스를 가져가면 -topmost 가 밀려서 오버레이가
+        # 게임 뒤로 숨는 경우가 있어, 주기적으로 다시 맨 앞으로 끌어올린다.
+        if sys.platform == "darwin":
+            self.root.after(700, self._reassert_topmost)
+
     # ---------------- UI 구성 ----------------
 
     def _build_ui(self):
@@ -453,6 +458,18 @@ class CooldownOverlay:
                 "경고",
                 f"전역 키 입력을 감지할 수 없습니다.\n{hint}\n\n({ex})",
             )
+
+    # ---------------- macOS: 항상 위 유지 ----------------
+
+    def _reassert_topmost(self):
+        try:
+            # 껐다 켜야 macOS 창 서버가 쌓임 순서를 다시 계산해서 앞으로 나온다.
+            self.win.attributes("-topmost", False)
+            self.win.attributes("-topmost", True)
+            self.win.lift()
+        except tk.TclError:
+            pass
+        self.root.after(700, self._reassert_topmost)
 
     # ---------------- 메인 루프 ----------------
 
