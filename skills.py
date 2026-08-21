@@ -103,6 +103,35 @@ def _write_config_file(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def normalize_key_field(raw_key):
+    """"key" 필드를 스텝 리스트(각 스텝 = {"mods": [...], "key": "..."})로 정규화한다.
+
+    하위호환: 예전 버전은 "key"에 문자열 하나(예: "3")만 저장했다. 이 경우
+    "보조키 없는 스텝 1개"로 취급한다. 새 버전은 조합/순서 입력(예:
+    shift+z 다음 shift+i)을 표현하기 위해 리스트를 저장한다.
+    """
+    if isinstance(raw_key, str):
+        key = raw_key.strip()
+        return [{"mods": [], "key": key}] if key else []
+
+    if isinstance(raw_key, list):
+        steps = []
+        for item in raw_key:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key", "")).strip()
+            if not key:
+                continue
+            mods = item.get("mods", [])
+            if not isinstance(mods, list):
+                mods = []
+            mods = sorted({str(m).strip() for m in mods if str(m).strip()})
+            steps.append({"mods": mods, "key": key})
+        return steps
+
+    return []
+
+
 def load_skills():
     """config.json 에서 스킬 목록을 불러온다. 파일이 없으면 기본값으로 새로 만든다."""
     _migrate_legacy_config_if_needed()
@@ -116,11 +145,11 @@ def load_skills():
         cleaned = []
         for item in raw_skills:
             name = str(item.get("name", "")).strip() or "이름없음"
-            key = str(item.get("key", "")).strip()
+            steps = normalize_key_field(item.get("key"))
             cooldown = float(item.get("cooldown", 0))
             sound = str(item.get("sound", "")).strip() or DEFAULT_SOUND
-            if key and cooldown > 0:
-                cleaned.append({"name": name, "key": key, "cooldown": cooldown, "sound": sound})
+            if steps and cooldown > 0:
+                cleaned.append({"name": name, "key": steps, "cooldown": cooldown, "sound": sound})
         return cleaned
     except Exception:
         # 파일이 손상된 경우 기본값으로 복구
@@ -150,4 +179,44 @@ def save_window_position(x, y):
     """오버레이 창 위치를 config.json 에 저장한다."""
     data = _read_config_file()
     data["window_position"] = {"x": int(x), "y": int(y)}
+    _write_config_file(data)
+
+
+DEFAULT_UI_SCALE = 1.0
+
+
+def load_ui_scale():
+    """마지막으로 저장된 오버레이 UI 크기 배율을 반환한다. 없거나 잘못됐으면 기본값(1.0)."""
+    try:
+        scale = float(_read_config_file().get("ui_scale", DEFAULT_UI_SCALE))
+        if scale > 0:
+            return scale
+    except (TypeError, ValueError):
+        pass
+    return DEFAULT_UI_SCALE
+
+
+def save_ui_scale(scale):
+    """오버레이 UI 크기 배율을 config.json 에 저장한다."""
+    data = _read_config_file()
+    data["ui_scale"] = float(scale)
+    _write_config_file(data)
+
+
+def load_overlay_width():
+    """마지막으로 저장된 오버레이 창 너비(px)를 반환한다. 없으면 None(자동 너비)."""
+    try:
+        width = _read_config_file().get("overlay_width")
+        if width is None:
+            return None
+        width = int(width)
+        return width if width > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def save_overlay_width(width):
+    """오버레이 창 너비(px)를 config.json 에 저장한다."""
+    data = _read_config_file()
+    data["overlay_width"] = int(width)
     _write_config_file(data)
