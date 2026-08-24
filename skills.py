@@ -132,13 +132,24 @@ def normalize_key_field(raw_key):
     return []
 
 
+def _default_skills():
+    """DEFAULT_SKILLS를 "key"가 스텝 리스트로 정규화된 상태로 복사해서 반환한다.
+    (DEFAULT_SKILLS 자체는 "key": "3" 같은 예전 문자열 형식으로 적혀 있어서,
+    그대로 SkillRuntime에 넘기면 문자열을 글자 단위로 순회하다 에러가 난다.)"""
+    return [
+        {**s, "key": normalize_key_field(s["key"])}
+        for s in DEFAULT_SKILLS
+    ]
+
+
 def load_skills():
     """config.json 에서 스킬 목록을 불러온다. 파일이 없으면 기본값으로 새로 만든다."""
     _migrate_legacy_config_if_needed()
 
     if not os.path.exists(CONFIG_PATH):
-        save_skills(DEFAULT_SKILLS)
-        return [dict(s) for s in DEFAULT_SKILLS]
+        defaults = _default_skills()
+        save_skills(defaults)
+        return defaults
 
     try:
         raw_skills = _read_config_file().get("skills", [])
@@ -153,7 +164,7 @@ def load_skills():
         return cleaned
     except Exception:
         # 파일이 손상된 경우 기본값으로 복구
-        return [dict(s) for s in DEFAULT_SKILLS]
+        return _default_skills()
 
 
 def save_skills(skills):
