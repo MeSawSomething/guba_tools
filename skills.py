@@ -142,37 +142,88 @@ def _default_skills():
     ]
 
 
-def load_skills():
-    """config.json 에서 스킬 목록을 불러온다. 파일이 없으면 기본값으로 새로 만든다."""
+def _clean_skill_list(raw_skills):
+    """스킬 dict 리스트를 정규화/검증한다 (이름/키 시퀀스/쿨타임/알림음)."""
+    cleaned = []
+    if not isinstance(raw_skills, list):
+        return cleaned
+    for item in raw_skills:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip() or "이름없음"
+        steps = normalize_key_field(item.get("key"))
+        try:
+            cooldown = float(item.get("cooldown", 0))
+        except (TypeError, ValueError):
+            cooldown = 0
+        sound = str(item.get("sound", "")).strip() or DEFAULT_SOUND
+        if steps and cooldown > 0:
+            cleaned.append({"name": name, "key": steps, "cooldown": cooldown, "sound": sound})
+    return cleaned
+
+
+DEFAULT_CHARACTER_NAME = "캐릭터1"
+
+
+def _default_characters():
+    return [{"name": DEFAULT_CHARACTER_NAME, "skills": _default_skills()}]
+
+
+def _clean_character(item):
+    if not isinstance(item, dict):
+        return None
+    name = str(item.get("name", "")).strip() or DEFAULT_CHARACTER_NAME
+    return {"name": name, "skills": _clean_skill_list(item.get("skills", []))}
+
+
+def load_characters():
+    """캐릭터(탭) 목록을 불러온다. 각 캐릭터는 {"name": str, "skills": [...]}.
+
+    하위호환: 예전 버전은 캐릭터 개념 없이 config.json 최상위에 "skills"
+    배열 하나만 저장했다 — 이 경우 캐릭터 1개("캐릭터1")로 마이그레이션한다.
+    """
     _migrate_legacy_config_if_needed()
 
     if not os.path.exists(CONFIG_PATH):
-        defaults = _default_skills()
-        save_skills(defaults)
-        return defaults
+        characters = _default_characters()
+        save_characters(characters, 0)
+        return characters
 
     try:
-        raw_skills = _read_config_file().get("skills", [])
-        cleaned = []
-        for item in raw_skills:
-            name = str(item.get("name", "")).strip() or "이름없음"
-            steps = normalize_key_field(item.get("key"))
-            cooldown = float(item.get("cooldown", 0))
-            sound = str(item.get("sound", "")).strip() or DEFAULT_SOUND
-            if steps and cooldown > 0:
-                cleaned.append({"name": name, "key": steps, "cooldown": cooldown, "sound": sound})
-        return cleaned
+        data = _read_config_file()
+        if "characters" in data:
+            characters = [_clean_character(c) for c in data.get("characters", [])]
+            characters = [c for c in characters if c is not None]
+        elif "skills" in data:
+            # 예전 단일 캐릭터 형식 -> 캐릭터 1개로 마이그레이션
+            characters = [{"name": DEFAULT_CHARACTER_NAME, "skills": _clean_skill_list(data.get("skills"))}]
+        else:
+            characters = []
+
+        return characters if characters else _default_characters()
     except Exception:
         # 파일이 손상된 경우 기본값으로 복구
-        return _default_skills()
+        return _default_characters()
 
 
-def save_skills(skills):
-    """스킬 목록을 config.json 에 저장한다. (프로그램을 껐다 켜도, 컴퓨터를
-    재부팅해도 유지됨 — 사용자 앱 데이터 폴더에 저장하기 때문)"""
+def save_characters(characters, active_index=0):
+    """캐릭터(탭) 목록과 현재 선택된 탭 인덱스를 config.json 에 저장한다."""
     data = _read_config_file()
-    data["skills"] = skills
+    data["characters"] = characters
+    data["active_character"] = int(active_index)
+    data.pop("skills", None)  # 예전(단일 캐릭터) 형식 필드는 정리
     _write_config_file(data)
+
+
+def load_active_character_index(count):
+    """마지막으로 선택돼 있던 캐릭터 탭 인덱스를 반환한다 (범위를 벗어나면 보정)."""
+    if count <= 0:
+        return 0
+    try:
+        idx = int(_read_config_file().get("active_character", 0))
+    except (TypeError, ValueError):
+        idx = 0
+    return max(0, min(idx, count - 1))
 
 
 def load_window_position():

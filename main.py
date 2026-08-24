@@ -26,7 +26,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 
 try:
     from pynput import keyboard as pynput_keyboard
@@ -41,8 +41,9 @@ except ImportError:
     HAS_WINSOUND = False
 
 from skills import (
-    load_skills,
-    save_skills,
+    load_characters,
+    save_characters,
+    load_active_character_index,
     load_window_position,
     save_window_position,
     load_ui_scale,
@@ -215,6 +216,16 @@ def steps_to_storage(steps):
     return [{"mods": sorted(mods), "key": key} for mods, key in steps]
 
 
+def skill_to_definition(skill):
+    """SkillRuntime -> config.json에 저장하는 스킬 dict."""
+    return {
+        "name": skill.name,
+        "key": steps_to_storage(skill.steps),
+        "cooldown": skill.cooldown,
+        "sound": skill.sound,
+    }
+
+
 # tkinter 이벤트의 state 비트마스크에서 보조키 여부를 읽어올 때 쓰는 비트.
 # Alt는 플랫폼마다 다른 비트를 쓰는데, Windows에서 Mod1(0x0008)은 Num Lock
 # 토글 상태라서 그대로 쓰면 Num Lock이 켜져있을 때마다 Alt가 눌린 걸로
@@ -384,7 +395,12 @@ class SkillRuntime:
 class CooldownOverlay:
     def __init__(self):
         self.key_queue = queue.Queue()
-        self.skills = [SkillRuntime(d) for d in load_skills()]
+        # 캐릭터(탭)마다 독립된 스킬 목록을 가진다: [{"name": str, "skills": [SkillRuntime,...]}, ...]
+        self.characters = [
+            {"name": c["name"], "skills": [SkillRuntime(d) for d in c["skills"]]}
+            for c in load_characters()
+        ]
+        self.active_index = load_active_character_index(len(self.characters))
 
         self.root = tk.Tk()
         self.root.withdraw()  # 실제 보이는 창은 아래의 Toplevel
@@ -443,6 +459,95 @@ class CooldownOverlay:
         x, y = self.win.winfo_x(), self.win.winfo_y()
         self.win.geometry(f"{width}x{height}+{x}+{y}")
 
+    # ---------------- 캐릭터(탭) ----------------
+
+    def _active_skills(self):
+        return self.characters[self.active_index]["skills"]
+
+    def _save_characters(self):
+        save_characters(
+            [
+                {"name": c["name"], "skills": [skill_to_definition(s) for s in c["skills"]]}
+                for c in self.characters
+            ],
+            self.active_index,
+        )
+
+    def _rebuild_tabs(self):
+        for child in self.tab_bar.winfo_children():
+            child.destroy()
+
+        for idx, character in enumerate(self.characters):
+            active = idx == self.active_index
+            tab = tk.Label(
+                self.tab_bar, text=character["name"],
+                bg=BG_COLOR if active else ACCENT,
+                fg=TEXT_COLOR if active else MUTED_TEXT,
+                font=self._font(8, bold=active), padx=8, pady=3, cursor="hand2",
+            )
+            tab.pack(side="left")
+            tab.bind("<Button-1>", lambda e, i=idx: self._switch_character(i))
+            tab.bind("<Double-Button-1>", lambda e, i=idx: self._rename_character(i))
+            tab.bind("<Button-3>", lambda e, i=idx: self._delete_character(i))
+
+        add_tab = tk.Label(
+            self.tab_bar, text="+", bg=ACCENT, fg=MUTED_TEXT,
+            font=self._font(9, bold=True), padx=8, pady=3, cursor="hand2",
+        )
+        add_tab.pack(side="left")
+        add_tab.bind("<Button-1>", lambda e: self._add_character())
+
+    def _switch_character(self, index):
+        if index == self.active_index:
+            return
+        self.active_index = index
+        self._save_characters()
+        self._rebuild_tabs()
+        self._rebuild_rows()
+
+    def _rename_character(self, index):
+        current = self.characters[index]["name"]
+        new_name = simpledialog.askstring(
+            "캐릭터 이름 변경", "캐릭터 이름:", initialvalue=current, parent=self.win,
+        )
+        if new_name is None:
+            return
+        new_name = new_name.strip()
+        if not new_name or new_name == current:
+            return
+        self.characters[index]["name"] = new_name
+        self._save_characters()
+        self._rebuild_tabs()
+
+    def _add_character(self):
+        existing = {c["name"] for c in self.characters}
+        n = len(self.characters) + 1
+        name = f"캐릭터{n}"
+        while name in existing:
+            n += 1
+            name = f"캐릭터{n}"
+        self.characters.append({"name": name, "skills": []})
+        self.active_index = len(self.characters) - 1
+        self._save_characters()
+        self._rebuild_tabs()
+        self._rebuild_rows()
+
+    def _delete_character(self, index):
+        if len(self.characters) <= 1:
+            messagebox.showinfo("안내", "캐릭터가 하나뿐일 때는 삭제할 수 없습니다.")
+            return
+        name = self.characters[index]["name"]
+        if not messagebox.askyesno("캐릭터 삭제", f"'{name}' 캐릭터와 그 스킬을 모두 삭제할까요?"):
+            return
+        del self.characters[index]
+        if self.active_index >= len(self.characters):
+            self.active_index = len(self.characters) - 1
+        elif self.active_index > index:
+            self.active_index -= 1
+        self._save_characters()
+        self._rebuild_tabs()
+        self._rebuild_rows()
+
     def _build_ui(self):
         self.header = tk.Frame(self.win, bg=ACCENT, cursor="fleur")
         self.header.pack(fill="x")
@@ -475,6 +580,11 @@ class CooldownOverlay:
             widget.bind("<B1-Motion>", self._on_drag)
             widget.bind("<ButtonRelease-1>", self._end_drag)
 
+        # 캐릭터 탭 목록 (여러 캐릭터를 각각 다른 스킬 세트로 전환).
+        self.tab_bar = tk.Frame(self.win, bg=ACCENT)
+        self.tab_bar.pack(fill="x")
+        self._rebuild_tabs()
+
         self.body = tk.Frame(self.win, bg=BG_COLOR)
         self.body.pack(fill="both", expand=True, padx=6, pady=6)
 
@@ -502,8 +612,9 @@ class CooldownOverlay:
         self.rows = {}
 
         bar_height = self._bar_height()
+        active_skills = self._active_skills()
 
-        if not self.skills:
+        if not active_skills:
             empty = tk.Label(
                 self.body, text="설정(⚙)에서 스킬을 추가하세요",
                 bg=BG_COLOR, fg=MUTED_TEXT, font=self._font(9),
@@ -512,7 +623,7 @@ class CooldownOverlay:
             self._reapply_overlay_width()
             return
 
-        for skill in self.skills:
+        for skill in active_skills:
             row = tk.Frame(self.body, bg=BG_COLOR)
             row.pack(fill="x", pady=3)
 
@@ -681,6 +792,7 @@ class CooldownOverlay:
         self.title_label.config(font=self._font(9, bold=True))
         self.settings_btn.config(font=self._font(10))
         self.close_btn.config(font=self._font(10))
+        self._rebuild_tabs()
         self._rebuild_rows()
 
     # ---------------- 전역 키 감지 ----------------
@@ -749,8 +861,34 @@ class CooldownOverlay:
         except queue.Empty:
             pass
 
+        # 쿨타임 진행/완료 알림은 모든 캐릭터에 대해 갱신한다 — 지금 보고
+        # 있지 않은(백그라운드) 캐릭터라도 쿨타임이 끝나면 소리는 울려야 한다.
         now = time.time()
-        for skill in self.skills:
+        for character in self.characters:
+            for skill in character["skills"]:
+                self._update_skill_cooldown(skill, now)
+
+        # 화면에 그리는 건 현재 탭(캐릭터)의 스킬 행뿐이다.
+        self._refresh_rows()
+
+        self.root.after(100, self._tick)
+
+    def _update_skill_cooldown(self, skill, now):
+        if not skill.active:
+            return
+        elapsed = now - skill.start_time
+        remaining = skill.cooldown - elapsed
+        if remaining <= 0:
+            skill.active = False
+            skill.remaining = 0
+            if not skill.notified:
+                skill.notified = True
+                self._on_ready(skill)
+        else:
+            skill.remaining = remaining
+
+    def _refresh_rows(self):
+        for skill in self._active_skills():
             entry = self.rows.get(id(skill))
             if entry is None:
                 continue
@@ -761,33 +899,17 @@ class CooldownOverlay:
             canvas.coords(text_id, bar_width / 2, bar_height / 2)
 
             if skill.active:
-                elapsed = now - skill.start_time
-                remaining = skill.cooldown - elapsed
-                if remaining <= 0:
-                    skill.active = False
-                    skill.remaining = 0
-                    canvas.coords(bar, 0, 0, bar_width, bar_height)
-                    canvas.itemconfig(text_id, text="준비")
-                    if not skill.notified:
-                        skill.notified = True
-                        self._on_ready(skill)
-                    else:
-                        canvas.itemconfig(bar, fill=BAR_READY)
-                else:
-                    skill.remaining = remaining
-                    ratio = max(0.0, 1 - remaining / skill.cooldown)
-                    canvas.coords(bar, 0, 0, bar_width * ratio, bar_height)
-                    canvas.itemconfig(bar, fill=BAR_COOLDOWN)
-                    canvas.itemconfig(text_id, text=f"{remaining:0.1f}s")
+                ratio = max(0.0, 1 - skill.remaining / skill.cooldown)
+                canvas.coords(bar, 0, 0, bar_width * ratio, bar_height)
+                canvas.itemconfig(bar, fill=BAR_COOLDOWN)
+                canvas.itemconfig(text_id, text=f"{skill.remaining:0.1f}s")
             else:
                 canvas.coords(bar, 0, 0, bar_width, bar_height)
                 canvas.itemconfig(text_id, text="준비")
 
-        self.root.after(100, self._tick)
-
     def _handle_key(self, mods, key_name):
         now = time.time()
-        for skill in self.skills:
+        for skill in self._active_skills():
             self._advance_skill(skill, mods, key_name, now)
 
     def _advance_skill(self, skill, mods, key_name, now):
@@ -854,8 +976,8 @@ class CooldownOverlay:
         SettingsWindow(self)
 
     def apply_new_skills(self, definitions):
-        save_skills(definitions)
-        self.skills = [SkillRuntime(d) for d in definitions]
+        self.characters[self.active_index]["skills"] = [SkillRuntime(d) for d in definitions]
+        self._save_characters()
         self._rebuild_rows()
 
     def quit(self):
@@ -1080,7 +1202,8 @@ class SettingsWindow:
     def __init__(self, app: CooldownOverlay):
         self.app = app
         self.win = tk.Toplevel(app.win)
-        self.win.title("쿨타임 트래커 설정")
+        active_name = app.characters[app.active_index]["name"]
+        self.win.title(f"쿨타임 트래커 설정 — {active_name}")
         self.win.attributes("-topmost", True)
         position_near(self.win, app.win, width=440, height=360)
 
@@ -1110,7 +1233,7 @@ class SettingsWindow:
     def _reload_tree(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
-        for idx, skill in enumerate(self.app.skills):
+        for idx, skill in enumerate(self.app._active_skills()):
             sound_label = SOUND_LABELS.get(skill.sound, skill.sound)
             self.tree.insert(
                 "", "end", iid=str(idx),
@@ -1118,10 +1241,7 @@ class SettingsWindow:
             )
 
     def _current_definitions(self):
-        return [
-            {"name": s.name, "key": steps_to_storage(s.steps), "cooldown": s.cooldown, "sound": s.sound}
-            for s in self.app.skills
-        ]
+        return [skill_to_definition(s) for s in self.app._active_skills()]
 
     def add_skill(self):
         dlg = SkillDialog(self.win, app=self.app)
@@ -1145,7 +1265,7 @@ class SettingsWindow:
             messagebox.showinfo("안내", "수정할 스킬을 목록에서 선택하세요.")
             return
         idx = int(sel[0])
-        current = self.app.skills[idx]
+        current = self.app._active_skills()[idx]
         dlg = SkillDialog(
             self.win,
             initial={
