@@ -103,36 +103,127 @@ def _write_config_file(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def load_skills():
-    """config.json 에서 스킬 목록을 불러온다. 파일이 없으면 기본값으로 새로 만든다."""
+def normalize_key_field(raw_key):
+    """"key" 필드를 스텝 리스트(각 스텝 = {"mods": [...], "key": "..."})로 정규화한다.
+
+    하위호환: 예전 버전은 "key"에 문자열 하나(예: "3")만 저장했다. 이 경우
+    "보조키 없는 스텝 1개"로 취급한다. 새 버전은 조합/순서 입력(예:
+    shift+z 다음 shift+i)을 표현하기 위해 리스트를 저장한다.
+    """
+    if isinstance(raw_key, str):
+        key = raw_key.strip()
+        return [{"mods": [], "key": key}] if key else []
+
+    if isinstance(raw_key, list):
+        steps = []
+        for item in raw_key:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key", "")).strip()
+            if not key:
+                continue
+            mods = item.get("mods", [])
+            if not isinstance(mods, list):
+                mods = []
+            mods = sorted({str(m).strip() for m in mods if str(m).strip()})
+            steps.append({"mods": mods, "key": key})
+        return steps
+
+    return []
+
+
+def _default_skills():
+    """DEFAULT_SKILLS를 "key"가 스텝 리스트로 정규화된 상태로 복사해서 반환한다.
+    (DEFAULT_SKILLS 자체는 "key": "3" 같은 예전 문자열 형식으로 적혀 있어서,
+    그대로 SkillRuntime에 넘기면 문자열을 글자 단위로 순회하다 에러가 난다.)"""
+    return [
+        {**s, "key": normalize_key_field(s["key"])}
+        for s in DEFAULT_SKILLS
+    ]
+
+
+def _clean_skill_list(raw_skills):
+    """스킬 dict 리스트를 정규화/검증한다 (이름/키 시퀀스/쿨타임/알림음)."""
+    cleaned = []
+    if not isinstance(raw_skills, list):
+        return cleaned
+    for item in raw_skills:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip() or "이름없음"
+        steps = normalize_key_field(item.get("key"))
+        try:
+            cooldown = float(item.get("cooldown", 0))
+        except (TypeError, ValueError):
+            cooldown = 0
+        sound = str(item.get("sound", "")).strip() or DEFAULT_SOUND
+        if steps and cooldown > 0:
+            cleaned.append({"name": name, "key": steps, "cooldown": cooldown, "sound": sound})
+    return cleaned
+
+
+DEFAULT_CHARACTER_NAME = "캐릭터1"
+
+
+def _default_characters():
+    return [{"name": DEFAULT_CHARACTER_NAME, "skills": _default_skills()}]
+
+
+def _clean_character(item):
+    if not isinstance(item, dict):
+        return None
+    name = str(item.get("name", "")).strip() or DEFAULT_CHARACTER_NAME
+    return {"name": name, "skills": _clean_skill_list(item.get("skills", []))}
+
+
+def load_characters():
+    """캐릭터(탭) 목록을 불러온다. 각 캐릭터는 {"name": str, "skills": [...]}.
+
+    하위호환: 예전 버전은 캐릭터 개념 없이 config.json 최상위에 "skills"
+    배열 하나만 저장했다 — 이 경우 캐릭터 1개("캐릭터1")로 마이그레이션한다.
+    """
     _migrate_legacy_config_if_needed()
 
     if not os.path.exists(CONFIG_PATH):
-        save_skills(DEFAULT_SKILLS)
-        return [dict(s) for s in DEFAULT_SKILLS]
+        characters = _default_characters()
+        save_characters(characters, 0)
+        return characters
 
     try:
-        raw_skills = _read_config_file().get("skills", [])
-        cleaned = []
-        for item in raw_skills:
-            name = str(item.get("name", "")).strip() or "이름없음"
-            key = str(item.get("key", "")).strip()
-            cooldown = float(item.get("cooldown", 0))
-            sound = str(item.get("sound", "")).strip() or DEFAULT_SOUND
-            if key and cooldown > 0:
-                cleaned.append({"name": name, "key": key, "cooldown": cooldown, "sound": sound})
-        return cleaned
+        data = _read_config_file()
+        if "characters" in data:
+            characters = [_clean_character(c) for c in data.get("characters", [])]
+            characters = [c for c in characters if c is not None]
+        elif "skills" in data:
+            # 예전 단일 캐릭터 형식 -> 캐릭터 1개로 마이그레이션
+            characters = [{"name": DEFAULT_CHARACTER_NAME, "skills": _clean_skill_list(data.get("skills"))}]
+        else:
+            characters = []
+
+        return characters if characters else _default_characters()
     except Exception:
         # 파일이 손상된 경우 기본값으로 복구
-        return [dict(s) for s in DEFAULT_SKILLS]
+        return _default_characters()
 
 
-def save_skills(skills):
-    """스킬 목록을 config.json 에 저장한다. (프로그램을 껐다 켜도, 컴퓨터를
-    재부팅해도 유지됨 — 사용자 앱 데이터 폴더에 저장하기 때문)"""
+def save_characters(characters, active_index=0):
+    """캐릭터(탭) 목록과 현재 선택된 탭 인덱스를 config.json 에 저장한다."""
     data = _read_config_file()
-    data["skills"] = skills
+    data["characters"] = characters
+    data["active_character"] = int(active_index)
+    data.pop("skills", None)  # 예전(단일 캐릭터) 형식 필드는 정리
     _write_config_file(data)
+
+
+def load_active_character_index(count):
+    """마지막으로 선택돼 있던 캐릭터 탭 인덱스를 반환한다 (범위를 벗어나면 보정)."""
+    if count <= 0:
+        return 0
+    try:
+        idx = int(_read_config_file().get("active_character", 0))
+    except (TypeError, ValueError):
+        idx = 0
+    return max(0, min(idx, count - 1))
 
 
 def load_window_position():
@@ -150,4 +241,44 @@ def save_window_position(x, y):
     """오버레이 창 위치를 config.json 에 저장한다."""
     data = _read_config_file()
     data["window_position"] = {"x": int(x), "y": int(y)}
+    _write_config_file(data)
+
+
+DEFAULT_UI_SCALE = 1.0
+
+
+def load_ui_scale():
+    """마지막으로 저장된 오버레이 UI 크기 배율을 반환한다. 없거나 잘못됐으면 기본값(1.0)."""
+    try:
+        scale = float(_read_config_file().get("ui_scale", DEFAULT_UI_SCALE))
+        if scale > 0:
+            return scale
+    except (TypeError, ValueError):
+        pass
+    return DEFAULT_UI_SCALE
+
+
+def save_ui_scale(scale):
+    """오버레이 UI 크기 배율을 config.json 에 저장한다."""
+    data = _read_config_file()
+    data["ui_scale"] = float(scale)
+    _write_config_file(data)
+
+
+def load_overlay_width():
+    """마지막으로 저장된 오버레이 창 너비(px)를 반환한다. 없으면 None(자동 너비)."""
+    try:
+        width = _read_config_file().get("overlay_width")
+        if width is None:
+            return None
+        width = int(width)
+        return width if width > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def save_overlay_width(width):
+    """오버레이 창 너비(px)를 config.json 에 저장한다."""
+    data = _read_config_file()
+    data["overlay_width"] = int(width)
     _write_config_file(data)
