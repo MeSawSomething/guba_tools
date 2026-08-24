@@ -821,6 +821,10 @@ class CooldownOverlay:
 
         try:
             self._listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
+            # 데몬 스레드로 지정해야, stop()이 (Windows에서 가끔 그렇듯) 후킹
+            # 스레드를 깔끔하게 못 끝내도 파이썬 프로세스가 백그라운드에
+            # 좀비처럼 남지 않고 확실히 종료된다.
+            self._listener.daemon = True
             self._listener.start()
         except Exception as ex:
             if sys.platform == "darwin":
@@ -1304,3 +1308,9 @@ if __name__ == "__main__":
 
     app = CooldownOverlay()
     app.run()
+
+    # mainloop()이 끝난 뒤(= 오버레이를 닫은 뒤)에도 pynput의 키보드 후킹
+    # 스레드 등이 깔끔하게 안 끝나면 프로세스가 안 보이게 백그라운드에 남을
+    # 수 있다 — 필요한 저장은 quit()에서 이미 다 끝났으니, 여기서 확실하게
+    # 프로세스를 종료시킨다.
+    os._exit(0)
