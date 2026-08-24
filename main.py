@@ -548,6 +548,19 @@ class CooldownOverlay:
         self._rebuild_tabs()
         self._rebuild_rows()
 
+    def reset_active_character_cooldowns(self):
+        """현재 탭(캐릭터)의 모든 스킬 쿨타임을 즉시 "준비" 상태로 되돌린다."""
+        for skill in self._active_skills():
+            skill.active = False
+            skill.remaining = 0.0
+            skill.notified = True
+            skill.progress = 0
+            skill.last_step_time = 0.0
+        # _refresh_rows()는 막대 색을 안 건드리므로(깜빡임 애니메이션과 안
+        # 겹치게 하려고), 리셋 직후 파란색(쿨타임 중) 색이 남지 않도록
+        # 행을 통째로 다시 그린다.
+        self._rebuild_rows()
+
     def _build_ui(self):
         self.header = tk.Frame(self.win, bg=ACCENT, cursor="fleur")
         self.header.pack(fill="x")
@@ -560,6 +573,13 @@ class CooldownOverlay:
 
         btn_frame = tk.Frame(self.header, bg=ACCENT)
         btn_frame.pack(side="right")
+
+        self.reset_btn = tk.Label(
+            btn_frame, text="↺", bg=ACCENT, fg=TEXT_COLOR,
+            font=self._font(10), padx=6, cursor="hand2",
+        )
+        self.reset_btn.pack(side="left")
+        self.reset_btn.bind("<Button-1>", lambda e: self.reset_active_character_cooldowns())
 
         self.settings_btn = tk.Label(
             btn_frame, text="⚙", bg=ACCENT, fg=TEXT_COLOR,
@@ -790,6 +810,7 @@ class CooldownOverlay:
     def _apply_ui_scale(self, scale):
         self.ui_scale = scale
         self.title_label.config(font=self._font(9, bold=True))
+        self.reset_btn.config(font=self._font(10))
         self.settings_btn.config(font=self._font(10))
         self.close_btn.config(font=self._font(10))
         self._rebuild_tabs()
